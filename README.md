@@ -10,3 +10,7 @@ PushButtonsManager
 * add event handler for "released" event:
     will receive the pin number of the pushed button + how much time it was held since the first "high" value.
 
+VibrationSensor
+---------------
+Get vibration sesnsor data and process for alarm usage:
+"IsBusted" - will return true if there were X vibrations in Y milliseconds (configurable).
