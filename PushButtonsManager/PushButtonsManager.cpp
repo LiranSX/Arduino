@@ -1,24 +1,115 @@
 #include <Arduino.h>
 #include <PushButtonsManager.h>
 
+
+// private
+bool PushButtonsManager::IsPushed(ButtonManagementDetails* buttonDetails)
+{
+	bool isPushed = false;
+
+	if (buttonDetails->Type == Digital)
+	{
+		DigitalPinButtonManagementDetails* digital = (DigitalPinButtonManagementDetails*)buttonDetails;
+		bool isHigh = digitalRead(digital->Pin);
+		isPushed = isHigh ^ digital->PulledUp; // xor
+	}
+	else if (buttonDetails->Type == Analog)
+	{
+		AnalogPinButtonManagementDetails* analog = (AnalogPinButtonManagementDetails*)buttonDetails;
+		int analogValue = analogRead(analog->Pin);
+		isPushed = (analog->InitialValue - analog->Radius) < analogValue &&  analogValue < (analog->InitialValue + analog->Radius);
+	}
+
+	return isPushed;
+}
+
+void PushButtonsManager::SubmitButton(ButtonManagementDetails* buttonDetails, int pin)
+{
+	buttonDetails->LastState = 0;
+	buttonDetails->PressedInvocationRequired = true;
+	buttonDetails->PressedStartTime = 0;
+	buttonDetails->Next = NULL;
+	buttonDetails->Pin = pin;
+	pinMode(pin, INPUT);
+	AddButton(buttonDetails);
+}
+
 void PushButtonsManager::AddButton(ButtonManagementDetails* buttonDetails)
 {
-	ButtonManagementDetails* walker;
+	ButtonManagementDetails* currentButton;
 	if (_buttonsList == NULL)
 	{
-		walker = _buttonsList = buttonDetails;
+		currentButton = _buttonsList = buttonDetails;
 	}
 	else
 	{
-		walker = _buttonsList;
-		while (walker->Next != NULL)
+		currentButton = _buttonsList;
+		while (currentButton->Next != NULL)
 		{
-			walker = walker->Next;
+			currentButton = currentButton->Next;
 		}
-		walker->Next = buttonDetails;
+		currentButton->Next = buttonDetails;
 	}
 }
 
+void PushButtonsManager::InvokePressHandler(ButtonManagementDetails* currentButton, long heldTime)
+{
+	if (currentButton->PressedInvocationRequired != NULL)
+	{
+		if (currentButton->Type == Digital)
+		{
+			DigitalPinButtonManagementDetails* digitalButton = (DigitalPinButtonManagementDetails*)currentButton;
+
+			DigitalPinPushButtonEventArgs e;
+			e.Pin = digitalButton->Pin;
+			e.HeldTime = heldTime;
+			digitalButton->PressedInvocationRequired = digitalButton->PressedHandler(e);
+		}
+		else if (currentButton->Type == Analog)
+		{
+			AnalogPinButtonManagementDetails* analogButton = (AnalogPinButtonManagementDetails*)currentButton;
+
+			AnalogPinPushButtonEventArgs e;
+			e.Label = new char[strlen(analogButton->Label) + 1];
+			strcpy(e.Label, analogButton->Label);
+			e.HeldTime = heldTime;
+			analogButton->PressedInvocationRequired = analogButton->PressedHandler(e);
+			delete e.Label;
+		}
+	}
+}
+
+void PushButtonsManager::InvokeReleaseHandler(ButtonManagementDetails* currentButton, long heldTime)
+{
+	if (currentButton->Type == Digital)
+	{
+		DigitalPinButtonManagementDetails* digitalButton = (DigitalPinButtonManagementDetails*)currentButton;
+		if (digitalButton->ReleasedHandler != NULL)
+		{
+			DigitalPinPushButtonEventArgs e;
+			e.Pin = digitalButton->Pin;
+			e.HeldTime = heldTime;
+			digitalButton->ReleasedHandler(e);
+		}
+	}
+	else if (currentButton->Type == Analog)
+	{
+		AnalogPinButtonManagementDetails* analogButton = (AnalogPinButtonManagementDetails*)currentButton;
+
+		if (analogButton->ReleasedHandler != NULL)
+		{
+			AnalogPinPushButtonEventArgs e;
+			e.Label = new char[strlen(analogButton->Label) + 1];
+			strcpy(e.Label, analogButton->Label);
+			e.HeldTime = heldTime;
+			analogButton->ReleasedHandler(e);
+			delete e.Label;
+		}
+	}
+}
+
+
+// public
 PushButtonsManager::PushButtonsManager()
 {
 	_buttonsList = NULL;
@@ -31,24 +122,41 @@ PushButtonsManager::~PushButtonsManager()
 	while (_buttonsList != NULL)
 	{
 		next = _buttonsList->Next;
+		if (_buttonsList->Type == Analog)
+		{
+			delete(((AnalogPinButtonManagementDetails*)_buttonsList)->Label);
+		}
 		delete _buttonsList;
 		_buttonsList = next;
 	}
 }
 
-void PushButtonsManager::RegisterButton(int pin, PushButtonPressedEvent pushButtonPressedEventHandler, PushButtonReleasedEvent pushButtonReleasedEventHandler)
+void PushButtonsManager::RegisterDigitalPinButton(int pin, bool pulledUp, DigitalPinPushButtonPressedEvent pressedEventHandler, DigitalPinPushButtonReleasedEvent releasedEventHandler)
 {
-	ButtonManagementDetails* newButton = new ButtonManagementDetails();
-	newButton->Pin = pin;
-	newButton->ButtonPressedHandler = pushButtonPressedEventHandler;
-	newButton->ButtonReleasedHandler = pushButtonReleasedEventHandler;
-	newButton->LastState = 0;
-	newButton->PressedInvocationRequired = true;
-	newButton->PressedStartTime = 0;
-	newButton->Next = NULL;
-	AddButton(newButton);
-	pinMode(newButton->Pin, INPUT);
+	DigitalPinButtonManagementDetails* newButton = new DigitalPinButtonManagementDetails();
+
+	newButton->PulledUp = pulledUp;
+	newButton->PressedHandler = pressedEventHandler;
+	newButton->ReleasedHandler = releasedEventHandler;
+
+	SubmitButton(newButton, pin);
 }
+
+void PushButtonsManager::RegisterAnalogPinButton(int pin, char* label, int initialValue, int radius, AnalogPinPushButtonPressedEvent pressedEventHandler, AnalogPinPushButtonReleasedEvent releasedEventHandler)
+{
+	AnalogPinButtonManagementDetails* newButton = new AnalogPinButtonManagementDetails();
+	
+	newButton->Label = new char[strlen(label) + 1];
+	strcpy(newButton->Label, label);
+	newButton->InitialValue = initialValue;
+	newButton->Radius = radius;
+
+	newButton->PressedHandler = pressedEventHandler;
+	newButton->ReleasedHandler = releasedEventHandler;
+
+	SubmitButton(newButton, pin);
+}
+
 
 
 void PushButtonsManager::Process(long currentTime)
@@ -58,46 +166,44 @@ void PushButtonsManager::Process(long currentTime)
 		currentTime = millis();
 	}
 
-	ButtonManagementDetails* walker = _buttonsList;
-	while (walker != NULL)
+	ButtonManagementDetails* currentButton = _buttonsList;
+	while (currentButton != NULL)
 	{
-		bool buttonState = digitalRead(walker->Pin);
-		if (buttonState) // high
+		bool buttonState = IsPushed(currentButton);
+
+		if (buttonState) // pushed
 		{
-			if (walker->LastState) // "still" high?
+			if (currentButton->LastState) // "still" pushed?
 			{
-				if (walker->PressedInvocationRequired) // invocation required?
+				if (currentButton->PressedInvocationRequired) // invocation required?
 				{
-					if (walker->PressedInvocationRequired != NULL)
+					if (currentButton->PressedInvocationRequired != NULL)
 					{
-						walker->PressedInvocationRequired = walker->ButtonPressedHandler(walker->Pin, currentTime - walker->PressedStartTime);
+						InvokePressHandler(currentButton, currentTime - currentButton->PressedStartTime);
 					}
 				}
 			}
-			else // "new" high
+			else // "new" push
 			{
-				if (walker->PressedInvocationRequired != NULL)
+				if (currentButton->PressedInvocationRequired != NULL)
 				{
-					walker->PressedInvocationRequired = walker->ButtonPressedHandler(walker->Pin, 0);
+					InvokePressHandler(currentButton, 0);
 				}
-				walker->LastState = true;
-				walker->PressedStartTime = currentTime;
+				currentButton->LastState = true;
+				currentButton->PressedStartTime = currentTime;
 			}
 		}
-		else // low
+		else // not pushed
 		{
-			if (walker->LastState) // was high before?
+			if (currentButton->LastState) // was pushed before?
 			{
-				if (walker->ButtonReleasedHandler != NULL)
-				{
-					walker->ButtonReleasedHandler(walker->Pin, currentTime - walker->PressedStartTime);
-				}
+				InvokeReleaseHandler(currentButton, currentTime - currentButton->PressedStartTime);
 			}
-			walker->LastState = false;
-			walker->PressedInvocationRequired = true;
-			walker->PressedStartTime = 0;
+			currentButton->LastState = false;
+			currentButton->PressedInvocationRequired = true;
+			currentButton->PressedStartTime = 0;
 		}
 
-		walker = walker->Next;
+		currentButton = currentButton->Next;
 	}
 }
