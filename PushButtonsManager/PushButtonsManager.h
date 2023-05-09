@@ -1,4 +1,7 @@
+#ifndef PUSH_BUTTON_MANAGER
+#define PUSH_BUTTON_MANAGER
 
+typedef void (*DebugWriter)(const char* __fmt, ...);
 
 struct DigitalPinPushButtonEventArgs
 {
@@ -8,82 +11,97 @@ struct DigitalPinPushButtonEventArgs
 
 struct AnalogPinPushButtonEventArgs
 {
-	char* Label;
+	int Id;
 	long HeldTime;
 };
 
-// when button will be pressed, its identifier (name for analog, pin for digital) + how much time it was held will be sent. the return value indicates whether further calls are allowed:
+// when button will be pressed, its identifier (id for analog, pin# for digital) + how much time it was held will be sent. the return value indicates whether further calls are allowed:
 // false = do not call for this button (for current press) any more
 // true = keep calling with an increasing heldTime
-typedef bool(*DigitalPinPushButtonPressedEvent)(DigitalPinPushButtonEventArgs e);
-typedef bool(*AnalogPinPushButtonPressedEvent)(AnalogPinPushButtonEventArgs e);
+typedef bool(*DigitalPinPushButtonPressedEventHandler)(DigitalPinPushButtonEventArgs e);
+typedef bool(*AnalogPinPushButtonPressedEventHandler)(AnalogPinPushButtonEventArgs e);
 
 // will be called when a button is released along with the total pressed heldTime
-typedef void(*DigitalPinPushButtonReleasedEvent)(DigitalPinPushButtonEventArgs e);
-typedef void(*AnalogPinPushButtonReleasedEvent)(AnalogPinPushButtonEventArgs e);
+typedef void(*DigitalPinPushButtonReleasedEventHandler)(DigitalPinPushButtonEventArgs e);
+typedef void(*AnalogPinPushButtonReleasedEventHandler)(AnalogPinPushButtonEventArgs e);
 
-typedef enum PinType { Digital, Analog };
-
-
-struct ButtonManagementDetails
+class BasePushButton
 {
-	PinType Type;
-	int Pin;
-	bool LastState;
-	bool PressedInvocationRequired;
-	long PressedStartTime;
-	ButtonManagementDetails* Next;
+private:
+	bool _lastState;
+	bool _pressedInvocationRequired;
+	long _pressedStartTime;
+
+protected:
+	int _pin;
+protected:
+	DebugWriter Writer;
+
+public:
+	BasePushButton(DebugWriter debugWriter, int pin);
+	~BasePushButton();
+	void Process(long currentTime);
+	virtual bool IsPressed() = 0;
+	virtual bool Press(long heldTime) = 0;
+	virtual void Release(long heldTime) = 0;
+	BasePushButton* Next;
 };
 
-struct DigitalPinButtonManagementDetails : ButtonManagementDetails
+class DigitalPushButton : BasePushButton
 {
-	DigitalPinButtonManagementDetails()
-	{
-		Type = Digital;
-	}
+private:
+	bool _pulledUp;
+	DigitalPinPushButtonPressedEventHandler _pressHandler;
+	DigitalPinPushButtonReleasedEventHandler _releaseHandler;
 
-	bool PulledUp;
-	DigitalPinPushButtonPressedEvent PressedHandler;
-	DigitalPinPushButtonReleasedEvent ReleasedHandler;
+public:
+	DigitalPushButton(DebugWriter debugWriter,
+		int pin,
+		bool pulledUp,
+		DigitalPinPushButtonPressedEventHandler pressHandler,
+		DigitalPinPushButtonReleasedEventHandler releaseHandler);
+	bool IsPressed();
+	bool Press(long heldTime);
+	void Release(long heldTime);
+	~DigitalPushButton();
 };
 
-struct AnalogPinButtonManagementDetails : ButtonManagementDetails
+class AnalogPushButton : BasePushButton
 {
-	AnalogPinButtonManagementDetails()
-	{
-		Type = Analog;
-	}
+private:
+	int _initialValue;
+	int _radius;
+	int _id;
 
-	char* Label;
-	int InitialValue;
-	int Radius;
-	AnalogPinPushButtonPressedEvent PressedHandler;
-	AnalogPinPushButtonReleasedEvent ReleasedHandler;
+	AnalogPinPushButtonPressedEventHandler _pressHandler;
+	AnalogPinPushButtonReleasedEventHandler _releaseHandler;
+public:
+	AnalogPushButton(DebugWriter debugWriter,
+		int pin,
+		int id,
+		int initialValue,
+		int radius,
+		AnalogPinPushButtonPressedEventHandler pressHandler,
+		AnalogPinPushButtonReleasedEventHandler releaseHandler);
+	bool IsPressed();
+	bool Press(long heldTime);
+	void Release(long heldTime);
+	~AnalogPushButton();
 };
-
 
 class PushButtonsManager
 {
 private:
-	ButtonManagementDetails* _buttonsList;
-	void AddButton(ButtonManagementDetails* buttonDetails);
-	bool IsPushed(ButtonManagementDetails* buttonDetails);
-	void SubmitButton(ButtonManagementDetails* buttonDetails, int pin);
-	void InvokePressHandler(ButtonManagementDetails* currentButton, long heldTime);
-	void InvokeReleaseHandler(ButtonManagementDetails* currentButton, long heldTime);
-
+	BasePushButton* _buttonsList;
+	void AddButton(BasePushButton* buttonDetails);
+	DebugWriter _debugWriter;
 public:
-	PushButtonsManager();
+	PushButtonsManager(DebugWriter debugWriter);
 	~PushButtonsManager();
-	void RegisterDigitalPinButton(int pin, bool pulledUp, DigitalPinPushButtonPressedEvent pressedEventHandler, DigitalPinPushButtonReleasedEvent releasedEventHandler);
-	void RegisterAnalogPinButton(int pin, char* label, int initialValue, int radius, AnalogPinPushButtonPressedEvent pressedEventHandler, AnalogPinPushButtonReleasedEvent releasedEventHandler);
+	void RegisterDigitalPinButton(int pin, bool pulledUp, DigitalPinPushButtonPressedEventHandler pressedEventHandler, DigitalPinPushButtonReleasedEventHandler releasedEventHandler);
+	void RegisterAnalogPinButton(int pin, int id, int initialValue, int radius, AnalogPinPushButtonPressedEventHandler pressedEventHandler, AnalogPinPushButtonReleasedEventHandler releasedEventHandler);
 	void Process(long currentTime = 0);
 };
 
-
-
-
-
-
-
+#endif
 
